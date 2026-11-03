@@ -72,6 +72,10 @@ const Navbar = () => {
     }`;
 
   const currentName = user?.user_metadata?.full_name || user?.email?.split("@")[0] || "User";
+  const currentPhoto =
+    user?.user_metadata?.photo ||
+    profiles.find((p) => String(p.id) === String(user?.id) || String(p.userId) === String(user?.id))?.photo ||
+    null;
 
   const handleBellClick = () => {
     setBellOpen((v) => !v);
@@ -242,8 +246,16 @@ const Navbar = () => {
                     onClick={() => { setProfileDropdown((v) => !v); setBellOpen(false); }}
                     className="flex items-center gap-2.5 px-3 py-1.5 bg-slate-50/90 hover:bg-slate-100 rounded-2xl border border-border shadow-sm transition-all text-left cursor-pointer"
                   >
-                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-navy to-royal flex items-center justify-center text-white text-xs font-bold shadow-sm">
-                      {currentName[0]?.toUpperCase()}
+                    <div className="w-8 h-8 rounded-xl overflow-hidden bg-gradient-to-br from-navy to-royal flex items-center justify-center text-white text-xs font-bold shadow-sm flex-shrink-0">
+                      {currentPhoto ? (
+                        <img
+                          src={currentPhoto}
+                          alt={currentName}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        currentName[0]?.toUpperCase()
+                      )}
                     </div>
                     <div className="flex flex-col">
                       <span className="text-xs font-bold text-navy truncate max-w-[110px]">
@@ -294,14 +306,23 @@ const Navbar = () => {
                                 });
                                 setProfileDropdown(false);
                               }}
-                              className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between transition-all ${
+                              className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between gap-2 transition-all cursor-pointer ${
                                 isCurrent
                                   ? "bg-royal/10 text-royal font-bold"
                                   : "hover:bg-slate-100 text-navy"
                               }`}
                             >
-                              <span className="truncate">{p.name} ({p.gender || "Member"})</span>
-                              {isCurrent && <span className="text-[10px]">✓</span>}
+                              <div className="flex items-center gap-2 truncate">
+                                <div className="w-6 h-6 rounded-lg overflow-hidden bg-slate-200 flex-shrink-0 flex items-center justify-center text-[10px]">
+                                  {p.photo ? (
+                                    <img src={p.photo} alt={p.name} className="w-full h-full object-cover" />
+                                  ) : (
+                                    p.name[0]?.toUpperCase()
+                                  )}
+                                </div>
+                                <span className="truncate">{p.name}</span>
+                              </div>
+                              {isCurrent && <span className="text-[10px] flex-shrink-0">✓</span>}
                             </button>
                           );
                         })}

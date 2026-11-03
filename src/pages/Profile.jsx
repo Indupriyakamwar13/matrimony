@@ -56,6 +56,10 @@ const Profile = () => {
     return customProfiles.find((p) => String(p.id) === String(id) || String(p.userId) === String(id));
   }, [id, customProfiles]);
 
+  const isOwnProfile = Boolean(
+    user && profile && (String(profile.id) === String(user.id) || String(profile.userId) === String(user.id))
+  );
+
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(""), 3500);
@@ -205,7 +209,14 @@ const Profile = () => {
               </div>
 
               <div className="flex flex-wrap gap-2.5">
-                {interestStatus === "accepted" ? (
+                {isOwnProfile ? (
+                  <Link
+                    to="/dashboard"
+                    className="py-3 px-6 rounded-2xl font-bold text-xs sm:text-sm bg-gold-accent hover:bg-gold-dark text-white shadow-gold flex items-center gap-2 transition-all"
+                  >
+                    <span>✎</span> Edit My Profile & Photo
+                  </Link>
+                ) : interestStatus === "accepted" ? (
                   <Link
                     to={`/messages?with=${profile.userId || profile.id}`}
                     className="py-3 px-6 rounded-2xl font-bold text-xs sm:text-sm btn-stylish-primary shadow-royal flex items-center gap-2"
@@ -234,7 +245,7 @@ const Profile = () => {
                     <span>💌</span> Connect / Send Interest
                   </button>
                 )}
-                {interestStatus === "accepted" && (
+                {interestStatus === "accepted" && !isOwnProfile && (
                   <span className="py-3 px-4 bg-emerald-500/20 backdrop-blur text-emerald-300 rounded-2xl font-bold text-xs flex items-center border border-emerald-400/30">
                     ✓ Matched
                   </span>

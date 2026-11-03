@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { supabase } from "../lib/supabaseClient";
@@ -8,6 +8,7 @@ import {
   updateInterestStatus,
   getAcceptedMatches,
 } from "../lib/matchService";
+import { compressImageFile, SAMPLE_AVATARS } from "../lib/imageUtils";
 
 const MOTHER_TONGUES = [
   "Hindi",
@@ -41,6 +42,11 @@ const Dashboard = () => {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoToast, setPhotoToast] = useState("");
+
+  const bannerFileInputRef = useRef(null);
+  const modalFileInputRef = useRef(null);
 
   const welcomeBanner = location.state?.welcomeMessage || "";
 
@@ -68,6 +74,7 @@ const Dashboard = () => {
     const meta = user?.user_metadata || {};
     setFormData({
       full_name: meta.full_name || "",
+      photo: meta.photo || "",
       age: meta.age || 26,
       gender: meta.gender || "Female",
       height: meta.height || "5'7\"",
@@ -90,6 +97,42 @@ const Dashboard = () => {
       pref_age_max: meta.pref_age_max || 32,
       pref_religion: meta.pref_religion || "Any",
     });
+  };
+
+  // Direct 1-click photo update from header banner
+  const handleBannerPhotoChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setPhotoUploading(true);
+      const dataUrl = await compressImageFile(file, 450, 0.82);
+      await updateProfile({ photo: dataUrl });
+      setFormData((prev) => ({ ...prev, photo: dataUrl }));
+      setPhotoToast("Profile picture updated successfully! ✨");
+      setTimeout(() => setPhotoToast(""), 3500);
+    } catch (err) {
+      setPhotoToast("Failed to upload photo. Please try again.");
+      setTimeout(() => setPhotoToast(""), 3500);
+    } finally {
+      setPhotoUploading(false);
+      if (bannerFileInputRef.current) bannerFileInputRef.current.value = "";
+    }
+  };
+
+  // Photo update inside edit modal
+  const handleModalPhotoChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setPhotoUploading(true);
+      const dataUrl = await compressImageFile(file, 450, 0.82);
+      setFormData((prev) => ({ ...prev, photo: dataUrl }));
+    } catch (err) {
+      setSaveError(err.message || "Failed to process photo.");
+    } finally {
+      setPhotoUploading(false);
+      if (modalFileInputRef.current) modalFileInputRef.current.value = "";
+    }
   };
 
   const fetchStats = async () => {
@@ -186,6 +229,14 @@ const Dashboard = () => {
   return (
     <div className="min-h-screen bg-cream py-8 px-4 sm:px-6 lg:px-8 text-text">
       <div className="max-w-5xl mx-auto space-y-6">
+        {/* Toast Feedback */}
+        {photoToast && (
+          <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl flex items-center gap-3 shadow-sm animate-fade-in">
+            <span className="text-xl">✨</span>
+            <div className="font-semibold text-xs sm:text-sm">{photoToast}</div>
+          </div>
+        )}
+
         {/* Welcome Celebration Banner */}
         {welcomeBanner && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl flex items-center gap-3 shadow-sm animate-fade-in">
@@ -196,9 +247,48 @@ const Dashboard = () => {
 
         {/* Executive Header Banner */}
         <div className="bg-gradient-to-r from-navy via-navy-light to-navy rounded-3xl p-6 sm:p-8 text-white flex flex-col md:flex-row items-center gap-6 shadow-card">
-          <div className="w-20 h-20 rounded-2xl bg-white/10 backdrop-blur border border-white/20 flex items-center justify-center text-3xl font-bold font-serif shadow-inner flex-shrink-0">
-            {initials}
+          {/* Avatar with Quick Upload Camera Overlay */}
+          <div className="relative group flex-shrink-0">
+            <input
+              ref={bannerFileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleBannerPhotoChange}
+              className="hidden"
+            />
+            <div className="w-24 h-24 rounded-2xl bg-white/10 backdrop-blur border-2 border-white/20 overflow-hidden shadow-inner flex items-center justify-center">
+              {meta.photo ? (
+                <img
+                  src={meta.photo}
+                  alt={name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span className="text-3xl font-bold font-serif text-white">
+                  {initials}
+                </span>
+              )}
+            </div>
+
+            {/* Camera Overlay Button */}
+            <button
+              type="button"
+              onClick={() => bannerFileInputRef.current?.click()}
+              disabled={photoUploading}
+              title="Change Profile Picture"
+              className="absolute -bottom-1.5 -right-1.5 w-8 h-8 rounded-xl bg-gold-accent hover:bg-gold-dark text-white flex items-center justify-center shadow-lg border border-white/30 transition-all hover:scale-110 cursor-pointer disabled:opacity-50"
+            >
+              {photoUploading ? (
+                <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+              ) : (
+                <span className="text-sm">📷</span>
+              )}
+            </button>
           </div>
+
           <div className="flex-1 text-center md:text-left">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-gold-light/20 backdrop-blur rounded-full text-xs font-bold uppercase tracking-wider text-gold-border mb-2 border border-gold-border/30">
               <span>👑</span> Verified Executive Member
@@ -734,6 +824,93 @@ const Dashboard = () => {
             )}
 
             <form onSubmit={handleSaveProfile} className="space-y-6">
+              {/* Section 0: Profile Picture */}
+              <div className="p-4 bg-gradient-to-r from-cream via-white to-cream rounded-2xl border border-border">
+                <h3 className="text-xs font-bold text-royal uppercase tracking-wider mb-3">
+                  0. Profile Picture
+                </h3>
+                <div className="flex flex-col sm:flex-row items-center gap-4">
+                  <div className="relative flex-shrink-0">
+                    <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-royal/30 shadow-md bg-slate-100 flex items-center justify-center">
+                      {formData.photo ? (
+                        <img
+                          src={formData.photo}
+                          alt="Profile Preview"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="text-3xl text-slate-400">
+                          {formData.gender === "Male" ? "👨" : "👩"}
+                        </div>
+                      )}
+                    </div>
+                    {formData.photo && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData((prev) => ({ ...prev, photo: "" }))}
+                        title="Remove Photo"
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold shadow cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex-1 text-center sm:text-left space-y-2">
+                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                      <input
+                        ref={modalFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleModalPhotoChange}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => modalFileInputRef.current?.click()}
+                        disabled={photoUploading}
+                        className="px-3.5 py-1.5 bg-royal hover:bg-royal-dark text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {photoUploading ? "Processing…" : "📷 Upload New Photo"}
+                      </button>
+
+                      {formData.photo && (
+                        <button
+                          type="button"
+                          onClick={() => setFormData((prev) => ({ ...prev, photo: "" }))}
+                          className="px-3 py-1.5 border border-border hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-medium cursor-pointer"
+                        >
+                          Remove Photo
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="pt-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-muted block mb-1">
+                        Or select a stylish avatar:
+                      </span>
+                      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5">
+                        {SAMPLE_AVATARS.map((av) => (
+                          <button
+                            key={av.url}
+                            type="button"
+                            onClick={() => setFormData((prev) => ({ ...prev, photo: av.url }))}
+                            title={`${av.gender} — ${av.label}`}
+                            className={`w-8 h-8 rounded-xl overflow-hidden border transition-all cursor-pointer ${
+                              formData.photo === av.url
+                                ? "border-royal ring-2 ring-royal/30 scale-105"
+                                : "border-border hover:border-royal/50 opacity-80 hover:opacity-100"
+                            }`}
+                          >
+                            <img src={av.url} alt={av.label} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Section 1: Basic Identity */}
               <div>
                 <h3 className="text-xs font-bold text-royal uppercase tracking-wider mb-3">

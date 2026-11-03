@@ -6,6 +6,7 @@ import {
   getCustomProfiles,
   sendInterest as serviceSendInterest,
   getAllInterests,
+  syncDataFromSupabase,
 } from "../lib/matchService";
 
 const MOTHER_TONGUES = [
@@ -150,6 +151,7 @@ const Browse = () => {
 
   useEffect(() => {
     loadData();
+    syncDataFromSupabase(user?.id).catch(() => {});
     window.addEventListener("matrimony_data_updated", loadData);
     window.addEventListener("storage", loadData);
     return () => {

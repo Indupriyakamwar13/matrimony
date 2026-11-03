@@ -1,7 +1,7 @@
 // src/context/AuthContext.jsx
 import React, { createContext, useState, useContext, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { ensureUserProfileInStore } from "../lib/matchService";
+import { ensureUserProfileInStore, syncDataFromSupabase } from "../lib/matchService";
 
 const AuthContext = createContext();
 
@@ -22,6 +22,8 @@ export const AuthProvider = ({ children }) => {
         setUser(data.user);
         localStorage.setItem("matrimony_active_user", JSON.stringify(data.user));
         ensureUserProfileInStore(data.user);
+        // Sync all cross-device data (interests, messages, notifications) from Supabase
+        syncDataFromSupabase(data.user.id).catch(() => {});
         return data.user;
       }
       if (error && !error.message?.toLowerCase().includes("network") && !error.message?.toLowerCase().includes("fetch")) {
@@ -116,33 +118,8 @@ export const AuthProvider = ({ children }) => {
     if (updatedUser) {
       setUser(updatedUser);
       localStorage.setItem("matrimony_active_user", JSON.stringify(updatedUser));
-
-      // Also update matching entry in local custom profiles
-      try {
-        const local = JSON.parse(localStorage.getItem("matrimony_custom_profiles") || "[]");
-        const updated = local.map((p) => {
-          if (String(p.id) === String(updatedUser.id) || String(p.userId) === String(updatedUser.id)) {
-            return {
-              ...p,
-              name: metadata.full_name || p.name,
-              caste: metadata.caste || p.caste,
-              motherTongue: metadata.mother_tongue || p.motherTongue,
-              college: metadata.college || p.college,
-              occupation: metadata.occupation || p.occupation,
-              nri: metadata.nri ?? p.nri,
-              location: {
-                ...p.location,
-                city: metadata.city || p.location?.city || "Mumbai",
-                state: metadata.state || p.location?.state || "Maharashtra",
-              },
-            };
-          }
-          return p;
-        });
-        localStorage.setItem("matrimony_custom_profiles", JSON.stringify(updated));
-      } catch {
-        // ignore
-      }
+      ensureUserProfileInStore(updatedUser);
+      window.dispatchEvent(new Event("matrimony_data_updated"));
     }
 
     return updatedUser;
@@ -159,6 +136,8 @@ export const AuthProvider = ({ children }) => {
           setUser(session.user);
           localStorage.setItem("matrimony_active_user", JSON.stringify(session.user));
           ensureUserProfileInStore(session.user);
+          // Sync cross-device data on session restore
+          syncDataFromSupabase(session.user.id).catch(() => {});
         } else {
           const stored = localStorage.getItem("matrimony_active_user");
           if (stored) {
@@ -185,6 +164,8 @@ export const AuthProvider = ({ children }) => {
         setUser(session.user);
         localStorage.setItem("matrimony_active_user", JSON.stringify(session.user));
         ensureUserProfileInStore(session.user);
+        // Sync data whenever auth state changes (e.g. login on new device)
+        syncDataFromSupabase(session.user.id).catch(() => {});
       }
       setLoading(false);
     });

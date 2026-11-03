@@ -1,9 +1,10 @@
 // src/pages/Register.jsx
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { saveCustomProfile } from "../lib/matchService";
+import { compressImageFile, SAMPLE_AVATARS } from "../lib/imageUtils";
 
 const steps = [
   {
@@ -72,6 +73,7 @@ const steps = [
 const Register = () => {
   const navigate = useNavigate();
   const { switchUser } = useAuth();
+  const fileInputRef = useRef(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [formData, setFormData] = useState({
     gender: "Female",
@@ -81,12 +83,39 @@ const Register = () => {
     familyType: "Nuclear Family",
     prefReligion: "Any",
     prefNri: "No Preference",
+    photo: "",
   });
+  const [photoLoading, setPhotoLoading] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [registeredSuccess, setRegisteredSuccess] = useState(false);
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setPhotoLoading(true);
+      setError("");
+      const compressedDataUrl = await compressImageFile(file, 450, 0.82);
+      setFormData((prev) => ({ ...prev, photo: compressedDataUrl }));
+    } catch (err) {
+      setError(err.message || "Failed to process photo.");
+    } finally {
+      setPhotoLoading(false);
+    }
+  };
+
+  const handleSelectPresetAvatar = (url) => {
+    setFormData((prev) => ({ ...prev, photo: url }));
+    setError("");
+  };
+
+  const handleRemovePhoto = () => {
+    setFormData((prev) => ({ ...prev, photo: "" }));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -155,11 +184,17 @@ const Register = () => {
     try {
       const fullName = `${formData.firstName || ""} ${formData.lastName || ""}`.trim();
       const isNri = formData.nri?.includes("NRI");
+      const defaultPhoto =
+        formData.gender === "Male"
+          ? "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?fit=crop&w=600&h=600"
+          : "https://images.unsplash.com/photo-1534528741775-53994a69daeb?fit=crop&w=600&h=600";
+      const finalPhoto = formData.photo || defaultPhoto;
 
       const userMetadata = {
         full_name: fullName,
         first_name: formData.firstName,
         last_name: formData.lastName,
+        photo: finalPhoto,
         gender: formData.gender,
         age: Number(formData.age) || 25,
         mother_tongue: formData.motherTongue || "Hindi",
@@ -182,38 +217,61 @@ const Register = () => {
         pref_age_max: formData.prefAgeMax || 32,
       };
 
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email: formData.email.trim(),
-        password: formData.password,
-        options: {
-          data: userMetadata,
-        },
-      });
+      let supabaseUserId = null;
 
-      if (signUpError) {
-        console.error("Supabase signup error:", signUpError);
-        const msg = signUpError.message?.toLowerCase() || "";
-        if (msg.includes("already registered") || msg.includes("duplicate")) {
-          setError("An account with this email already exists. Please sign in instead.");
-          setCurrentStep(0);
-        } else if (msg.includes("password")) {
-          setError("Password is too weak. Please choose at least 6 characters.");
-          setCurrentStep(0);
-        } else {
-          setError(signUpError.message || "Registration failed. Please try again.");
+      try {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: formData.email.trim(),
+          password: formData.password,
+          options: { data: userMetadata },
+        });
+
+        if (signUpError) {
+          const msg = signUpError.message?.toLowerCase() || "";
+          const code = signUpError.code || signUpError.status || "";
+
+          if (msg.includes("already registered") || msg.includes("duplicate") || msg.includes("already exists")) {
+            setError("An account with this email already exists. Please sign in instead.");
+            setCurrentStep(0);
+            setLoading(false);
+            return;
+          } else if (msg.includes("password")) {
+            setError("Password is too weak. Please choose at least 6 characters.");
+            setCurrentStep(0);
+            setLoading(false);
+            return;
+          } else if (
+            msg.includes("rate limit") ||
+            msg.includes("over_email_send_rate_limit") ||
+            msg.includes("email rate") ||
+            msg.includes("too many") ||
+            String(code) === "429"
+          ) {
+            // Rate limit hit — fall through to local-only registration below
+            console.warn("Supabase email rate limit hit — registering locally.");
+          } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("failed")) {
+            // Network error — fall through to local-only registration
+            console.warn("Supabase unreachable — registering locally.");
+          } else {
+            // Any other Supabase error — fall through to local registration
+            console.warn("Supabase signup error, falling back locally:", signUpError.message);
+          }
+        } else if (data?.user) {
+          if (data.user.identities && data.user.identities.length === 0) {
+            setError("An account with this email already exists. Please sign in instead.");
+            setCurrentStep(0);
+            setLoading(false);
+            return;
+          }
+          supabaseUserId = data.user.id;
         }
-        setLoading(false);
-        return;
+      } catch {
+        // Network/sandbox unavailable — fall through to local-only
+        console.warn("Supabase unreachable — registering locally.");
       }
 
-      if (data?.user && data.user.identities && data.user.identities.length === 0) {
-        setError("An account with this email already exists. Please sign in instead.");
-        setCurrentStep(0);
-        setLoading(false);
-        return;
-      }
-
-      const userId = String(data?.user?.id || `user_${Date.now()}`);
+      // Use Supabase UUID if available, otherwise generate a stable local ID
+      const userId = String(supabaseUserId || `user_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`);
       const newProfile = {
         id: userId,
         userId: userId,
@@ -236,10 +294,7 @@ const Register = () => {
         education: formData.education || "Graduate Degree",
         occupation: formData.occupation || "Executive",
         income: formData.income || "Competitive",
-        photo:
-          formData.gender === "Male"
-            ? "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?fit=crop&w=600&h=600"
-            : "https://images.unsplash.com/photo-1534528741775-53994a69daeb?fit=crop&w=600&h=600",
+        photo: finalPhoto,
         family: {
           father: formData.father || "Retired Executive",
           mother: formData.mother || "Homemaker",
@@ -268,7 +323,7 @@ const Register = () => {
       return;
     } catch (e) {
       console.error("Unexpected signup error:", e);
-      setError("An unexpected error occurred. Please check your network and try again.");
+      setError(e?.message || "An unexpected error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -419,6 +474,116 @@ const Register = () => {
                     Click here to Sign In →
                   </Link>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Step 0: Profile Picture Picker */}
+          {currentStep === 0 && (
+            <div className="mb-6 p-4 sm:p-5 bg-gradient-to-r from-cream via-white to-cream rounded-2xl border border-border/80 shadow-sm">
+              <label className="block text-[11px] font-bold text-navy uppercase tracking-wider mb-2">
+                Profile Picture (Optional)
+              </label>
+
+              <div className="flex flex-col sm:flex-row items-center gap-5">
+                {/* Photo Preview */}
+                <div className="relative group">
+                  <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-royal/30 shadow-md bg-slate-100 flex items-center justify-center">
+                    {formData.photo ? (
+                      <img
+                        src={formData.photo}
+                        alt="Profile Preview"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="text-4xl text-slate-400">
+                        {formData.gender === "Male" ? "👨" : "👩"}
+                      </div>
+                    )}
+                  </div>
+                  {formData.photo && (
+                    <button
+                      type="button"
+                      onClick={handleRemovePhoto}
+                      title="Remove Photo"
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow transition-all cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Upload & Options Controls */}
+                <div className="flex-1 text-center sm:text-left space-y-2">
+                  <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2.5">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoUpload}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={photoLoading}
+                      className="px-4 py-2 bg-royal hover:bg-royal-dark text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {photoLoading ? (
+                        <>
+                          <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                          </svg>
+                          <span>Processing…</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>📷</span>
+                          <span>{formData.photo ? "Change Photo" : "Upload Your Photo"}</span>
+                        </>
+                      )}
+                    </button>
+
+                    {formData.photo && (
+                      <button
+                        type="button"
+                        onClick={handleRemovePhoto}
+                        className="px-3 py-2 border border-border hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-medium transition-all cursor-pointer"
+                      >
+                        Reset to Default
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-muted">
+                    Upload a clear portrait from your device (JPG, PNG). Automatically optimized.
+                  </p>
+
+                  {/* Quick Avatar Presets */}
+                  <div className="pt-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted block mb-1.5">
+                      Or pick a preset avatar:
+                    </span>
+                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                      {SAMPLE_AVATARS.map((av) => (
+                        <button
+                          key={av.url}
+                          type="button"
+                          onClick={() => handleSelectPresetAvatar(av.url)}
+                          title={`${av.gender} — ${av.label}`}
+                          className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${
+                            formData.photo === av.url
+                              ? "border-royal ring-2 ring-royal/30 scale-105"
+                              : "border-border/80 hover:border-royal/50 hover:scale-105 opacity-80 hover:opacity-100"
+                          }`}
+                        >
+                          <img src={av.url} alt={av.label} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}

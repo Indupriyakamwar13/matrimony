@@ -11,6 +11,219 @@ export const notifyChange = () => {
   window.dispatchEvent(new Event("matrimony_data_updated"));
 };
 
+// ─── CROSS-DEVICE SYNC ───
+/**
+ * Pull all profiles, interests and messages from Supabase
+ * and merge them into localStorage so the data is available on any device.
+ */
+export const syncDataFromSupabase = async (userId = null) => {
+  const uid = userId ? String(userId) : null;
+
+  // ── 1. Sync ALL profiles (so Browse shows everyone on all devices) ──
+  try {
+    const { data: remoteProfiles, error: profErr } = await supabase
+      .from("profiles")
+      .select("*");
+
+    if (!profErr && Array.isArray(remoteProfiles) && remoteProfiles.length > 0) {
+      const local = getCustomProfiles();
+
+      for (const r of remoteProfiles) {
+        const remoteId = String(r.user_id || r.id);
+        const idx = local.findIndex(
+          (p) =>
+            String(p.id) === remoteId ||
+            String(p.userId) === remoteId ||
+            (r.email && p.email && p.email.toLowerCase() === r.email.toLowerCase())
+        );
+        const mapped = {
+          id: remoteId,
+          userId: remoteId,
+          email: r.email || "",
+          name: r.name || "",
+          age: r.age || 25,
+          gender: r.gender || "Female",
+          height: r.height || "5'6\"",
+          motherTongue: r.mother_tongue || "Hindi",
+          caste: r.caste || "",
+          religion: r.religion || "Hindu",
+          nri: r.nri || false,
+          location: {
+            city: r.city || "Mumbai",
+            state: r.state || "Maharashtra",
+            country: r.nri ? "Abroad" : "India",
+          },
+          college: r.college || "",
+          education: r.education || "",
+          occupation: r.occupation || "",
+          income: r.income || "",
+          photo: r.photo || null,
+          family: {
+            father: r.father || "",
+            mother: r.mother || "",
+            siblings: r.siblings || "",
+          },
+          preferences: {
+            religion: [r.pref_religion || "Any"],
+            ageRange: [r.pref_age_min || 22, r.pref_age_max || 35],
+          },
+          about: r.about || "",
+        };
+        if (idx >= 0) {
+          local[idx] = { ...local[idx], ...mapped };
+        } else {
+          local.unshift(mapped);
+        }
+      }
+      localStorage.setItem(PROFILES_KEY, JSON.stringify(local));
+      notifyChange();
+    }
+  } catch (err) {
+    console.warn("Profiles sync error:", err);
+  }
+
+  if (!uid) return;
+
+  // ── 2. Sync interests ──
+  try {
+    const { data: remoteInterests, error: intErr } = await supabase
+      .from("interests")
+      .select("*")
+      .or(`from_user_id.eq.${uid},to_user_id.eq.${uid}`);
+
+    if (!intErr && Array.isArray(remoteInterests) && remoteInterests.length > 0) {
+      const local = (() => {
+        try { return JSON.parse(localStorage.getItem(INTERESTS_KEY) || "[]"); } catch { return []; }
+      })();
+
+      const mapped = remoteInterests.map((r) => ({
+        id: r.id,
+        fromUserId: r.from_user_id,
+        toUserId: r.to_user_id || r.to_profile_id,
+        fromUserName: r.from_user_name || "",
+        toUserName: r.to_user_name || "",
+        fromUserPhoto: r.from_user_photo || null,
+        toUserPhoto: r.to_user_photo || null,
+        fromUserCity: r.from_user_city || "",
+        toUserCity: r.to_user_city || "",
+        fromUserOccupation: r.from_user_occupation || "",
+        toUserOccupation: r.to_user_occupation || "",
+        status: r.status || "pending",
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+
+      const merged = [...local];
+      for (const remote of mapped) {
+        const idx = merged.findIndex((l) => String(l.id) === String(remote.id));
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], ...remote };
+        } else {
+          merged.push(remote);
+        }
+      }
+      localStorage.setItem(INTERESTS_KEY, JSON.stringify(merged));
+    }
+  } catch {
+    // Supabase not available — keep local data as-is
+  }
+
+  // ── 3. Sync messages ──
+  try {
+    const allInterests = (() => {
+      try { return JSON.parse(localStorage.getItem(INTERESTS_KEY) || "[]"); } catch { return []; }
+    })();
+    const acceptedConvIds = allInterests
+      .filter(
+        (i) =>
+          i.status === "accepted" &&
+          (String(i.fromUserId) === uid || String(i.toUserId) === uid)
+      )
+      .map((i) => {
+        const sorted = [String(i.fromUserId), String(i.toUserId)].sort();
+        return `conv_${sorted[0]}_${sorted[1]}`;
+      });
+
+    if (acceptedConvIds.length > 0) {
+      const { data: remoteMessages, error: msgErr } = await supabase
+        .from("messages")
+        .select("*")
+        .in("conversation_id", acceptedConvIds);
+
+      if (!msgErr && Array.isArray(remoteMessages) && remoteMessages.length > 0) {
+        const localMsgs = (() => {
+          try { return JSON.parse(localStorage.getItem(MESSAGES_KEY) || "[]"); } catch { return []; }
+        })();
+
+        const mappedMsgs = remoteMessages.map((r) => ({
+          id: r.id,
+          conversationId: r.conversation_id,
+          senderId: String(r.sender_id),
+          senderName: r.sender_name || "Member",
+          text: r.content || r.text || "",
+          createdAt: r.created_at,
+          time: r.created_at
+            ? new Date(r.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : "",
+        }));
+
+        const mergedMsgs = [...localMsgs];
+        for (const remote of mappedMsgs) {
+          const exists = mergedMsgs.some((l) => String(l.id) === String(remote.id));
+          if (!exists) mergedMsgs.push(remote);
+        }
+        localStorage.setItem(MESSAGES_KEY, JSON.stringify(mergedMsgs));
+      }
+    }
+  } catch {
+    // Supabase not available — keep local data as-is
+  }
+
+  notifyChange();
+};
+
+// ─── SAVE PROFILE TO SUPABASE ───
+/**
+ * Upsert a profile to the Supabase `profiles` table so it's visible on all devices.
+ */
+export const saveProfileToSupabase = async (profile) => {
+  if (!profile) return;
+  try {
+    const { error } = await supabase.from("profiles").upsert({
+      user_id: String(profile.userId || profile.id),
+      email: profile.email || "",
+      name: profile.name || "",
+      age: profile.age || 25,
+      gender: profile.gender || "Female",
+      height: profile.height || "",
+      mother_tongue: profile.motherTongue || "Hindi",
+      caste: profile.caste || "",
+      religion: profile.religion || "Hindu",
+      nri: profile.nri || false,
+      city: profile.location?.city || "Mumbai",
+      state: profile.location?.state || "Maharashtra",
+      college: profile.college || "",
+      education: profile.education || "",
+      occupation: profile.occupation || "",
+      income: profile.income || "",
+      photo: profile.photo || null,
+      father: profile.family?.father || "",
+      mother: profile.family?.mother || "",
+      siblings: profile.family?.siblings || "",
+      pref_religion: profile.preferences?.religion?.[0] || "Any",
+      pref_age_min: profile.preferences?.ageRange?.[0] || 22,
+      pref_age_max: profile.preferences?.ageRange?.[1] || 35,
+      about: profile.about || "",
+    }, { onConflict: "user_id" });
+
+    if (error) {
+      console.warn("saveProfileToSupabase warning:", error.message);
+    }
+  } catch (err) {
+    console.warn("saveProfileToSupabase exception:", err);
+  }
+};
+
 // ─── 1. PROFILES ───
 export const getCustomProfiles = () => {
   try {
@@ -44,6 +257,8 @@ export const saveCustomProfile = (profile) => {
     }
     localStorage.setItem(PROFILES_KEY, JSON.stringify(list));
     notifyChange();
+    // Also persist to Supabase for cross-device visibility
+    saveProfileToSupabase(profile);
   } catch (e) {
     console.error("saveCustomProfile error:", e);
   }
@@ -116,6 +331,8 @@ export const ensureUserProfileInStore = (user) => {
 
   localStorage.setItem(PROFILES_KEY, JSON.stringify(list));
   notifyChange();
+  // Sync to Supabase so this profile is visible on all devices
+  saveProfileToSupabase(profileData);
   return profileData;
 };
 
@@ -174,14 +391,14 @@ export const sendInterest = async (fromUser, toProfile) => {
     toUserAge: toProfile.age,
     toUserCity: toProfile.location?.city || toProfile.city || "India",
     toUserOccupation: toProfile.occupation || "Executive",
-    status: "pending", // 'pending' | 'accepted' | 'rejected'
+    status: "pending",
     createdAt: new Date().toISOString(),
   };
 
   all.unshift(newInterest);
   localStorage.setItem(INTERESTS_KEY, JSON.stringify(all));
 
-  // Notify the recipient that they received an interest
+  // Notify the recipient
   addNotification(toUserId, {
     type: "interest_received",
     title: "New Interest Request 💌",
@@ -204,8 +421,18 @@ export const sendInterest = async (fromUser, toProfile) => {
   // Sync with Supabase if accessible
   try {
     await supabase.from("interests").insert({
+      id: newInterest.id,
       from_user_id: fromUserId,
+      to_user_id: toUserId,
       to_profile_id: toUserId,
+      from_user_name: fromName,
+      to_user_name: toProfile.name || "Member",
+      from_user_photo: fromPhoto,
+      to_user_photo: toProfile.photo || null,
+      from_user_city: meta.city || "Mumbai",
+      to_user_city: toProfile.location?.city || toProfile.city || "India",
+      from_user_occupation: meta.occupation || "Professional",
+      to_user_occupation: toProfile.occupation || "Executive",
       status: "pending",
     });
   } catch {
@@ -230,22 +457,24 @@ export const updateInterestStatus = async (interestId, status) => {
     }
     return i;
   });
+
   localStorage.setItem(INTERESTS_KEY, JSON.stringify(updated));
 
-  // Send notification based on status change
   if (interest) {
+    const recipientId = status === "accepted" || status === "rejected"
+      ? interest.fromUserId
+      : interest.toUserId;
+
     if (status === "accepted") {
-      // Notify the person who originally sent the interest
-      addNotification(interest.fromUserId, {
+      addNotification(recipientId, {
         type: "interest_accepted",
-        title: "Interest Accepted! 🎉",
-        body: `${interest.toUserName} accepted your interest request! You can now chat.`,
+        title: "Interest Accepted 🎉",
+        body: `${interest.toUserName} accepted your interest request!`,
         from: interest.toUserId,
-        link: "/messages",
+        link: "/dashboard",
       });
     } else if (status === "rejected") {
-      // Optionally notify sender of decline (soft notification)
-      addNotification(interest.fromUserId, {
+      addNotification(recipientId, {
         type: "interest_declined",
         title: "Interest Update",
         body: `${interest.toUserName} has reviewed your interest request.`,
@@ -283,7 +512,6 @@ export const getAcceptedMatches = (userId) => {
     const partnerCity = isOutgoing ? match.toUserCity : match.fromUserCity;
     const partnerOccupation = isOutgoing ? match.toUserOccupation : match.fromUserOccupation;
 
-    // Check if we have an enriched custom profile
     const fullProfile = profiles.find(
       (p) => String(p.id) === String(partnerId) || String(p.userId) === String(partnerId)
     );
@@ -337,12 +565,9 @@ export const sendChatMessage = async (conversationId, senderId, senderName, text
   all.push(newMsg);
   localStorage.setItem(MESSAGES_KEY, JSON.stringify(all));
 
-  // Derive partner ID from conversationId pattern: conv_<id1>_<id2>
-  // conv_ prefix is 5 chars, then two IDs separated by _
+  // Notify partner
   try {
     const withoutPrefix = conversationId.replace(/^conv_/, "");
-    // Find which part is NOT the sender
-    // IDs can contain underscores themselves, so we use the interests store to find the partner
     const allInterests = getAllInterests();
     const relatedInterest = allInterests.find(
       (i) =>
@@ -385,8 +610,10 @@ export const sendChatMessage = async (conversationId, senderId, senderName, text
 
   try {
     await supabase.from("messages").insert({
+      id: newMsg.id,
       conversation_id: conversationId,
       sender_id: senderId,
+      sender_name: senderName || "Member",
       content: text.trim(),
     });
   } catch {
@@ -396,4 +623,3 @@ export const sendChatMessage = async (conversationId, senderId, senderName, text
   notifyChange();
   return newMsg;
 };
-
